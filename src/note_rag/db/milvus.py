@@ -23,7 +23,12 @@ def get_vector_store():
     return _vector_store
 
 
-def get_similar_data(query: str, k: int = 2):
+def print_similar_data(query: str, k: int = 2):
     results = get_vector_store().similarity_search_with_score(query, k=k)
     for res, score in results:
         print(f"* [SIM={score:3f}] {res.page_content} [{res.metadata}]")
+
+
+def get_similar_data(query: str, k: int = 2):
+    results = get_vector_store().similarity_search_with_score(query, k=k)
+    return results

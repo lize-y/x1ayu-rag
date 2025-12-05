@@ -4,7 +4,7 @@ import json
 
 
 def split_markdown(file_name: str, dir_path: str | None = None) -> list[Document]:
-    with open(dir_path+"/"+file_name, "r", encoding="utf-8") as f:
+    with open(dir_path + "/" + file_name, "r", encoding="utf-8") as f:
         markdown_text = f.read()
     headers_to_split_on = [
         ("#", "Header1"),

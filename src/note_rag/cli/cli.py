@@ -3,7 +3,8 @@ import os
 from pprint import pprint
 from note_rag.db.sqlite import initialize_db
 from note_rag.model.document import Document
-from note_rag.db.milvus import get_similar_data
+from note_rag.db.milvus import print_similar_data
+from note_rag.chain.chain import get_chain
 
 
 def init():
@@ -20,8 +21,17 @@ def add_file(file_path: str):
 
 
 def select_data(query: str, k: int = 2):
-    results = get_similar_data(query, k)
+    results = print_similar_data(query, k)
     pprint(results)
+
+
+def chain_results(query: str, mode: str | None = None, k: int = 2):
+    chain = get_chain(mode)
+    result = chain.invoke({"question": query})
+    print(
+        "========================================Chain Result========================================\n",
+        result,
+    )
 
 
 def cli():
@@ -41,6 +51,12 @@ def cli():
     parser.add_argument(
         "-k", type=int, default=2, help="Number of similar results (for select)"
     )
+    parser.add_argument(
+        "-c", "--chain", type=str, metavar="QUERY", help="Run RAG chain with query"
+    )
+    parser.add_argument(
+        "-m", "--mode", type=str, choices=["debug"], help="Mode for RAG chain"
+    )
 
     args = parser.parse_args()
 
@@ -51,5 +67,7 @@ def cli():
         add_file(args.add)
     elif args.select:
         select_data(args.select, args.k)
+    elif args.chain:
+        chain_results(args.chain, args.mode, args.k)
     else:
         parser.print_help()
