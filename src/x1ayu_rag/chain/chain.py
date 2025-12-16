@@ -2,6 +2,7 @@ from x1ayu_rag.db.milvus import get_similar_data
 from x1ayu_rag.llm.provider import get_chat_llm
 from langchain_core.runnables import RunnableLambda
 from langchain_core.prompts import PromptTemplate
+from x1ayu_rag.config.app_config import load_config
 from langchain_core.output_parsers import StrOutputParser
 
 _chain = None
@@ -43,11 +44,13 @@ def get_chain(mode: str | None = None, sys_prompt: str | None = None):
     """
     global _chain
     if _chain is None:
+        cfg = load_config()
+        user_sys_prompt = cfg.get("prompt", {}).get("sys_prompt") or ""
         rag_node = RunnableLambda(
             lambda x: {
                 "query": x["question"],
                 "docs": rag_search(x["question"], k=2),
-                "sys_prompt": sys_prompt if sys_prompt else "",
+                "sys_prompt": sys_prompt if sys_prompt else user_sys_prompt,
             }
         )
         template_node = PromptTemplate.from_template(template)

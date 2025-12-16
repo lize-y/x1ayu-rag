@@ -229,6 +229,7 @@ def cli():
     sp_config.add_argument("--emb-model", type=str, help="Embedding model")
     sp_config.add_argument("--emb-base-url", type=str, help="Embedding base URL")
     sp_config.add_argument("--emb-api-key", type=str, help="Embedding API key")
+    sp_config.add_argument("--sys-prompt", type=str, help="Custom system prompt for the RAG chain")
 
     args = parser.parse_args()
 
@@ -264,6 +265,7 @@ def cli():
         from x1ayu_rag.config.app_config import update_config
         update_config({"chat": {"provider": args.chat_provider, "model": args.chat_model, "base_url": args.chat_base_url, "api_key": args.chat_api_key}})
         update_config({"embedding": {"provider": args.emb_provider, "model": args.emb_model, "base_url": args.emb_base_url, "api_key": args.emb_api_key}})
+        update_config({"prompt": {"sys_prompt": args.sys_prompt}})
         print("Configuration updated.")
     else:
         parser.print_help()
