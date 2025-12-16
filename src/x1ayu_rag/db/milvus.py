@@ -1,11 +1,5 @@
-from langchain_ollama import OllamaEmbeddings
 from langchain_milvus import Milvus
-
-embeddings = OllamaEmbeddings(
-    model="embeddinggemma:latest",
-    base_url="http://host.docker.internal:11434",
-)
-
+from x1ayu_rag.llm.provider import get_embeddings
 
 URI = ".x1ayu_rag/milvus.db"
 
@@ -21,7 +15,7 @@ def get_vector_store():
     global _vector_store
     if _vector_store is None:
         _vector_store = Milvus(
-            embedding_function=embeddings,
+            embedding_function=get_embeddings(),
             connection_args={"uri": URI},
             index_params={"index_type": "FLAT", "metric_type": "L2"},
         )

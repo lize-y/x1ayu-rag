@@ -20,6 +20,35 @@ def init():
     initialize_db()
     print("RAG environment initialized.")
 
+def init_with_models(
+    chat_provider: str | None,
+    chat_model: str | None,
+    chat_base_url: str | None,
+    chat_api_key: str | None,
+    emb_provider: str | None,
+    emb_model: str | None,
+    emb_base_url: str | None,
+    emb_api_key: str | None,
+):
+    from x1ayu_rag.config.app_config import update_config
+    init()
+    update_config(
+        {
+            "chat": {
+                "provider": chat_provider,
+                "model": chat_model,
+                "base_url": chat_base_url,
+                "api_key": chat_api_key,
+            },
+            "embedding": {
+                "provider": emb_provider,
+                "model": emb_model,
+                "base_url": emb_base_url,
+                "api_key": emb_api_key,
+            },
+        }
+    )
+    print("Model configuration saved.")
 
 def add_file(file_path: str):
     """新增或更新单个文件到系统"""
@@ -163,6 +192,14 @@ def cli():
 
     # init
     sp_init = subparsers.add_parser("init", help="Initialize RAG environment")
+    sp_init.add_argument("--chat-provider", type=str, choices=["ollama", "openai"], help="Chat provider")
+    sp_init.add_argument("--chat-model", type=str, help="Chat model")
+    sp_init.add_argument("--chat-base-url", type=str, help="Chat base URL")
+    sp_init.add_argument("--chat-api-key", type=str, help="Chat API key")
+    sp_init.add_argument("--emb-provider", type=str, choices=["ollama", "openai"], help="Embedding provider")
+    sp_init.add_argument("--emb-model", type=str, help="Embedding model")
+    sp_init.add_argument("--emb-base-url", type=str, help="Embedding base URL")
+    sp_init.add_argument("--emb-api-key", type=str, help="Embedding API key")
 
     # add
     sp_add = subparsers.add_parser("add", help="Add files or directory to RAG")
@@ -181,11 +218,31 @@ def cli():
     
     # show
     sp_show = subparsers.add_parser("show", help="Print documents table")
+    
+    # config
+    sp_config = subparsers.add_parser("config", help="Configure model provider and credentials")
+    sp_config.add_argument("--chat-provider", type=str, choices=["ollama", "openai"], help="Chat provider")
+    sp_config.add_argument("--chat-model", type=str, help="Chat model")
+    sp_config.add_argument("--chat-base-url", type=str, help="Chat base URL")
+    sp_config.add_argument("--chat-api-key", type=str, help="Chat API key")
+    sp_config.add_argument("--emb-provider", type=str, choices=["ollama", "openai"], help="Embedding provider")
+    sp_config.add_argument("--emb-model", type=str, help="Embedding model")
+    sp_config.add_argument("--emb-base-url", type=str, help="Embedding base URL")
+    sp_config.add_argument("--emb-api-key", type=str, help="Embedding API key")
 
     args = parser.parse_args()
 
     if args.command == "init":
-        init()
+        init_with_models(
+            args.chat_provider,
+            args.chat_model,
+            args.chat_base_url,
+            args.chat_api_key,
+            args.emb_provider,
+            args.emb_model,
+            args.emb_base_url,
+            args.emb_api_key,
+        )
     elif args.command == "add":
         target = args.path
         if os.path.isdir(target):
@@ -203,5 +260,10 @@ def cli():
         )
     elif args.command == "show":
         show_documents()
+    elif args.command == "config":
+        from x1ayu_rag.config.app_config import update_config
+        update_config({"chat": {"provider": args.chat_provider, "model": args.chat_model, "base_url": args.chat_base_url, "api_key": args.chat_api_key}})
+        update_config({"embedding": {"provider": args.emb_provider, "model": args.emb_model, "base_url": args.emb_base_url, "api_key": args.emb_api_key}})
+        print("Configuration updated.")
     else:
         parser.print_help()

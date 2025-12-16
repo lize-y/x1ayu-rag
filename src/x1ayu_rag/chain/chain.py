@@ -1,5 +1,5 @@
 from x1ayu_rag.db.milvus import get_similar_data
-from langchain_ollama import ChatOllama
+from x1ayu_rag.llm.provider import get_chat_llm
 from langchain_core.runnables import RunnableLambda
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -51,11 +51,7 @@ def get_chain(mode: str | None = None, sys_prompt: str | None = None):
             }
         )
         template_node = PromptTemplate.from_template(template)
-        llm_node = ChatOllama(
-            model="qwen3:0.6b",
-            temperature=0,
-            base_url="http://host.docker.internal:11434",
-        )
+        llm_node = get_chat_llm(temperature=0)
         if mode == "debug":
             _chain = rag_node | template_node | debug | llm_node | StrOutputParser()
         else:
