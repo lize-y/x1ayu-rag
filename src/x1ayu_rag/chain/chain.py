@@ -1,4 +1,4 @@
-from note_rag.db.milvus import get_similar_data
+from x1ayu_rag.db.milvus import get_similar_data
 from langchain_ollama import ChatOllama
 from langchain_core.runnables import RunnableLambda
 from langchain_core.prompts import PromptTemplate
@@ -33,6 +33,14 @@ debug = RunnableLambda(
 
 
 def get_chain(mode: str | None = None, sys_prompt: str | None = None):
+    """构建并返回 RAG 链
+
+    参数:
+        mode: 可选的调试模式（'debug'）
+        sys_prompt: 系统提示词，插入到模板中
+    返回:
+        Runnable: 可调用链对象
+    """
     global _chain
     if _chain is None:
         rag_node = RunnableLambda(
@@ -56,6 +64,7 @@ def get_chain(mode: str | None = None, sys_prompt: str | None = None):
 
 
 def rag_search(query: str, k: int = 2):
+    """执行向量检索并格式化为模板可用的文本块"""
     docs = get_similar_data(query, k)
     return "\n".join(
         [

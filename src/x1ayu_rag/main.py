@@ -1,4 +1,4 @@
-from note_rag.cli.cli import cli
+from x1ayu_rag.cli.cli import cli
 import warnings
 import logging
 
