@@ -39,11 +39,12 @@ def add_path_recursive(root: str):
     if md_files:
         successes, failures = service.add_or_update_many(md_files)
         root_abs = str(p.resolve())
+        cwd = os.getcwd()
         for fp, action, uuid in successes:
-            rel = os.path.relpath(fp, root_abs) if os.path.isdir(root_abs) else os.path.basename(fp)
+            rel = os.path.relpath(fp, cwd)
             print(f"[{action}] {rel} uuid={uuid}")
         for fp, err in failures:
-            rel = os.path.relpath(fp, root_abs) if os.path.isdir(root_abs) else os.path.basename(fp)
+            rel = os.path.relpath(fp, cwd)
             print(f"[error] {rel}: {err}")
     else:
         print("No markdown files found under directory; checking deletions...")
@@ -55,16 +56,23 @@ def remove_missing_under_path(root: str):
     """检测数据库中文档在文件系统是否已删除，补偿删除记录与索引"""
     repo = DocumentRepository()
     abs_root = os.path.abspath(root)
-    docs = repo.list_by_path_prefix(abs_root)
+    rel_root = os.path.relpath(abs_root, os.getcwd())
+    docs = repo.list_all() if rel_root in (".", "") else repo.list_by_path_prefix(rel_root)
     service = IngestService(repo)
     removed = 0
     for doc in docs:
-        file_path = os.path.join(doc.path, doc.name)
-        if not os.path.exists(file_path):
-            # 删除文档及其分块与向量
+        if rel_root in (".", ""):
+            fs_path = os.path.join(abs_root, doc.path, doc.name)
+        else:
+            if not (doc.path == rel_root or doc.path.startswith(f"{rel_root}/")):
+                continue
+            rel_suffix = os.path.relpath(doc.path, rel_root)
+            fs_path = os.path.join(abs_root, "" if rel_suffix == "." else rel_suffix, doc.name)
+        if not os.path.exists(fs_path):
             service.repo.delete_by_uuid(doc.uuid)
             removed += 1
-            print(f"[deleted] {file_path} uuid={doc.uuid}")
+            rel_path = os.path.relpath(fs_path, abs_root)
+            print(f"[deleted] {rel_path} uuid={doc.uuid}")
     if removed == 0:
         print("No deletions detected.")
 

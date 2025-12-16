@@ -1,5 +1,6 @@
 from __future__ import annotations
 from typing import Optional
+import os
 from x1ayu_rag.db.sqlite import get_conn
 from x1ayu_rag.model.document import Document
 from x1ayu_rag.model.chunk import Chunk
@@ -78,12 +79,34 @@ class DocumentRepository:
             self.chunk_repo.store(new_chunks)
 
     def list_by_path_prefix(self, dir_path: str) -> list[Document]:
-        """按目录前缀列出文档（不加载分块）"""
+        """按目录前缀列出文档（不加载分块）
+        
+        要求：documents.path 为相对路径；dir_path 也应为相对路径。
+        """
         cursor = get_conn().cursor()
         cursor.execute(
             "SELECT * FROM documents WHERE path = ? OR path LIKE ?",
             (dir_path, f"{dir_path}/%"),
         )
+        rows = cursor.fetchall()
+        cursor.close()
+        docs: list[Document] = []
+        for row in rows:
+            docs.append(
+                Document(
+                    uuid=row["uuid"],
+                    name=row["name"],
+                    path=row["path"],
+                    hash=row["hash"],
+                    chunks=None,
+                )
+            )
+        return docs
+
+    def list_all(self) -> list[Document]:
+        """返回所有文档（不加载分块）"""
+        cursor = get_conn().cursor()
+        cursor.execute("SELECT * FROM documents")
         rows = cursor.fetchall()
         cursor.close()
         docs: list[Document] = []
