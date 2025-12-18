@@ -1,39 +1,159 @@
-import argparse
+import click
 import os
+import time
+import inquirer
 from pathlib import Path
-from x1ayu_rag.db.sqlite import initialize_db
+from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from x1ayu_rag.db.sqlite import initialize_db, get_conn
 from x1ayu_rag.chain.chain import get_chain
 from x1ayu_rag.service.ingest_service import IngestService
 from x1ayu_rag.service.search_service import SearchService
 from x1ayu_rag.repository.document_repository import DocumentRepository
-from x1ayu_rag.db.sqlite import get_conn
 from datetime import datetime, timezone
+from x1ayu_rag.config.app_config import update_config, load_config
 
+import sys
+from functools import wraps
 
-def init():
+console = Console()
+
+def check_initialized(f):
+    """Decorator to check if RAG environment is initialized."""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        db_file = os.path.join(".x1ayu_rag", "sqlite.db")
+        if not os.path.exists(db_file):
+            console.print("[red]Error: RAG environment not initialized.[/red]")
+            console.print("Please run [bold]rag init[/bold] first.")
+            sys.exit(1)
+        return f(*args, **kwargs)
+    return wrapper
+
+def _init_env():
     """初始化 RAG 运行环境（创建目录并初始化数据库）"""
-    os.makedirs(".x1ayu_rag", exist_ok=True)
-    db_file = os.path.join(".x1ayu_rag", "sqlite.db")
-    if os.path.exists(db_file):
-        print("RAG environment already initialized.")
-        return
-    initialize_db()
-    print("RAG environment initialized.")
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        transient=True,
+    ) as progress:
+        task = progress.add_task(description="Initializing environment...", total=None)
+        
+        os.makedirs(".x1ayu_rag", exist_ok=True)
+        db_file = os.path.join(".x1ayu_rag", "sqlite.db")
+        
+        if os.path.exists(db_file):
+            time.sleep(0.5)  # Simulate work for better UX
+            progress.update(task, description="Environment already initialized")
+        else:
+            initialize_db()
+            time.sleep(0.5)  # Simulate work
+            
+    console.print("[green]✓ RAG environment initialized.[/green]")
 
-def init_with_models(
-    chat_provider: str | None,
-    chat_model: str | None,
-    chat_base_url: str | None,
-    chat_api_key: str | None,
-    emb_provider: str | None,
-    emb_model: str | None,
-    emb_base_url: str | None,
-    emb_api_key: str | None,
-):
-    from x1ayu_rag.config.app_config import update_config
-    init()
-    update_config(
-        {
+def _configure_model(model_type: str, current_config: dict = None):
+    """交互式配置模型"""
+    current_config = current_config or {}
+    
+    console.print(f"\n[bold blue]Configure {model_type} Model[/bold blue]")
+    
+    # Provider selection with inquirer
+    questions = [
+        inquirer.List('provider',
+                      message=f"Select {model_type} provider",
+                      choices=['ollama', 'openai'],
+                      default=current_config.get("provider", "ollama")
+                      ),
+    ]
+    answers = inquirer.prompt(questions)
+    provider = answers['provider']
+    
+    # Model name
+    default_model = current_config.get("model")
+    if not default_model:
+        default_model = "llama3" if provider == "ollama" else "gpt-3.5-turbo"
+        
+    model = click.prompt(
+        f"Enter {model_type} model name",
+        default=default_model
+    )
+    
+    # Base URL
+    default_base_url = current_config.get("base_url")
+    if not default_base_url:
+        default_base_url = "http://localhost:11434" if provider == "ollama" else "https://api.openai.com/v1"
+        
+    base_url = click.prompt(
+        f"Enter {model_type} base URL",
+        default=default_base_url
+    )
+    
+    # API Key
+    api_key = current_config.get("api_key")
+    if provider == "openai":
+        api_key = click.prompt(
+            f"Enter {model_type} API key",
+            hide_input=True,
+            default=api_key or ""
+        )
+    else:
+        # No API key needed for Ollama, but we'll allow updating it if someone really wants to
+        # According to requirements: "当选择ollama时，不需要用户填写api_key"
+        # We will set it to empty string or keep existing if not prompting
+        api_key = ""
+
+    return {
+        "provider": provider,
+        "model": model,
+        "base_url": base_url,
+        "api_key": api_key
+    }
+
+@click.group()
+def cli():
+    """My Note RAG Tool - A CLI for managing and querying your personal knowledge base."""
+    pass
+
+@cli.command()
+@click.option('--chat-provider', type=click.Choice(["ollama", "openai"]), help="Chat provider")
+@click.option('--chat-model', help="Chat model")
+@click.option('--chat-base-url', help="Chat base URL")
+@click.option('--chat-api-key', help="Chat API key")
+@click.option('--emb-provider', type=click.Choice(["ollama", "openai"]), help="Embedding provider")
+@click.option('--emb-model', help="Embedding model")
+@click.option('--emb-base-url', help="Embedding base URL")
+@click.option('--emb-api-key', help="Embedding API key")
+def init(chat_provider, chat_model, chat_base_url, chat_api_key, 
+         emb_provider, emb_model, emb_base_url, emb_api_key):
+    """Initialize RAG environment and configure models."""
+    _init_env()
+    
+    # If any flags are provided, use non-interactive mode for those parts
+    # Otherwise, enter interactive mode
+    is_interactive = not any([chat_provider, chat_model, chat_base_url, chat_api_key,
+                            emb_provider, emb_model, emb_base_url, emb_api_key])
+    
+    if is_interactive:
+        if click.confirm("\nWould you like to configure models now?", default=True):
+            chat_config = _configure_model("Chat")
+            emb_config = _configure_model("Embedding")
+            
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                transient=True,
+            ) as progress:
+                task = progress.add_task(description="Saving configuration...", total=None)
+                update_config({
+                    "chat": chat_config,
+                    "embedding": emb_config
+                })
+                time.sleep(0.5)
+                
+            console.print("[green]✓ Configuration saved successfully![/green]")
+    else:
+        # Non-interactive mode (use provided flags)
+        update_config({
             "chat": {
                 "provider": chat_provider,
                 "model": chat_model,
@@ -46,42 +166,56 @@ def init_with_models(
                 "base_url": emb_base_url,
                 "api_key": emb_api_key,
             },
-        }
-    )
-    print("Model configuration saved.")
+        })
+        console.print("[green]Model configuration saved.[/green]")
 
-def add_file(file_path: str):
+@cli.command()
+@click.argument('path', type=click.Path(exists=True))
+@check_initialized
+def add(path):
+    """Add files or directory to RAG."""
+    target = Path(path)
+    if target.is_dir():
+        _add_path_recursive(target.absolute())
+    else:
+        _add_file(str(target))
+
+def _add_file(file_path: str):
     """新增或更新单个文件到系统"""
     service = IngestService()
     action, uuid = service.add_or_update(file_path)
-    print(f"[{action}] {os.path.basename(file_path)} uuid={uuid}")
+    # 移除 Rich 标记语法，确保 [action] 能正常显示
+    console.print(f"\\[{action}] {os.path.basename(file_path)} uuid={uuid}")
 
-
-def add_path_recursive(root: str):
+def _add_path_recursive(p: Path):
     """递归处理目录下所有 .md 文件，判断新增/更新"""
-    p = Path(root)
-    if p.is_dir():
-        md_files = [str(fp) for fp in p.rglob("*.md")]
-    else:
-        md_files = [str(p)] if p.suffix.lower() == ".md" else []
+    md_files = [str(fp) for fp in p.rglob("*.md")]
+    
     service = IngestService()
     if md_files:
-        successes, failures = service.add_or_update_many(md_files)
-        root_abs = str(p.resolve())
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            transient=True,
+        ) as progress:
+            task = progress.add_task(description=f"Processing {len(md_files)} files...", total=None)
+            successes, failures = service.add_or_update_many(md_files)
+        
         cwd = os.getcwd()
         for fp, action, uuid in successes:
             rel = os.path.relpath(fp, cwd)
-            print(f"[{action}] {rel} uuid={uuid}")
+            # 移除 Rich 标记语法，确保 [action] 能正常显示
+            console.print(f"\\[{action}] {rel} uuid={uuid}")
         for fp, err in failures:
             rel = os.path.relpath(fp, cwd)
-            print(f"[error] {rel}: {err}")
+            console.print(f"[red][error] {rel}: {err}[/red]")
     else:
-        print("No markdown files found under directory; checking deletions...")
+        console.print("No markdown files found under directory; checking deletions...")
+    
     # 删除文件系统中已缺失的文档
-    remove_missing_under_path(str(p.resolve()))
+    _remove_missing_under_path(str(p.resolve()))
 
-
-def remove_missing_under_path(root: str):
+def _remove_missing_under_path(root: str):
     """检测数据库中文档在文件系统是否已删除，补偿删除记录与索引"""
     repo = DocumentRepository()
     abs_root = os.path.abspath(root)
@@ -89,6 +223,7 @@ def remove_missing_under_path(root: str):
     docs = repo.list_all() if rel_root in (".", "") else repo.list_by_path_prefix(rel_root)
     service = IngestService(repo)
     removed = 0
+    
     for doc in docs:
         if rel_root in (".", ""):
             fs_path = os.path.join(abs_root, doc.path, doc.name)
@@ -97,23 +232,79 @@ def remove_missing_under_path(root: str):
                 continue
             rel_suffix = os.path.relpath(doc.path, rel_root)
             fs_path = os.path.join(abs_root, "" if rel_suffix == "." else rel_suffix, doc.name)
+        
         if not os.path.exists(fs_path):
             service.repo.delete_by_uuid(doc.uuid)
             removed += 1
             rel_path = os.path.relpath(fs_path, abs_root)
-            print(f"[deleted] {rel_path} uuid={doc.uuid}")
+            console.print(f"[yellow][deleted] {rel_path} uuid={doc.uuid}[/yellow]")
+            
     if removed == 0:
-        print("No deletions detected.")
+        console.print("No deletions detected.")
 
-def show_documents():
-    """打印 documents 表的内容"""
+@cli.command()
+@click.argument('query')
+@click.option('-k', default=2, help="Number of similar results")
+@check_initialized
+def select(query, k):
+    """Query similar data."""
+    service = SearchService()
+    results = service.search(query, k)
+    
+    for doc, score in results:
+        meta = doc.metadata or {}
+        dir_path = meta.get("dir_path", "")
+        file_name = meta.get("file_name", "")
+        mk_struct = meta.get("mk_struct", "")
+        sim = f"{score:3f}"
+        left = f"{dir_path}/{file_name}" if dir_path else file_name
+        right = f"{mk_struct}"
+        
+        console.print(f"\n[bold]File:[/bold] {left} | [bold]Structure:[/bold] {right} | [bold]Score:[/bold] {sim}")
+        console.print("-" * 80)
+        console.print(doc.page_content)
+        console.print("-" * 80)
+
+@cli.command()
+@click.argument('query')
+@click.option('-m', '--mode', type=click.Choice(["debug"]), help="Mode for RAG chain")
+@click.option('-k', default=2, help="Top-K similar chunks")
+@check_initialized
+def chain(query, mode, k):
+    """Run RAG chain with query."""
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        transient=True,
+    ) as progress:
+        task = progress.add_task(description="Thinking...", total=None)
+        chain_obj = get_chain(mode)
+        result = chain_obj.invoke({"question": query})
+        
+    console.print("\n[bold green]================ Chain Result ================[/bold green]")
+    console.print(result)
+
+@cli.command()
+@check_initialized
+def show():
+    """Print documents table."""
     cursor = get_conn().cursor()
     cursor.execute("SELECT name, path, created_at, updated_at FROM documents ORDER BY path, name")
     rows = cursor.fetchall()
     cursor.close()
+    
     if not rows:
-        print("documents is empty.")
+        console.print("documents is empty.")
         return
+        
+    # Using Rich Table for better formatting
+    from rich.table import Table
+    table = Table(show_header=True, header_style="bold magenta")
+    table.add_column("NAME")
+    table.add_column("PATH")
+    table.add_column("CREATED")
+    table.add_column("UPDATED")
+    
     def fmt_dt(v: str) -> str:
         if not v:
             return "-"
@@ -133,139 +324,143 @@ def show_documents():
             return dt_utc.astimezone().strftime("%Y-%m-%d %H:%M:%S")
         except Exception:
             return vs
-    headers = ["NAME", "PATH", "CREATED", "UPDATED"]
-    name_w = max(len(headers[0]), max(len(r["name"]) for r in rows))
-    path_w = max(len(headers[1]), max(len(r["path"]) for r in rows))
-    created_vals = [fmt_dt(r["created_at"]) for r in rows]
-    updated_vals = [fmt_dt(r["updated_at"]) for r in rows]
-    created_w = max(len(headers[2]), max(len(v) for v in created_vals))
-    updated_w = max(len(headers[3]), max(len(v) for v in updated_vals))
-    sep = "+" + "-" * (name_w + 2) + "+" + "-" * (path_w + 2) + "+" + "-" * (created_w + 2) + "+" + "-" * (updated_w + 2) + "+"
-    print(sep)
-    print(f"| {headers[0]:<{name_w}} | {headers[1]:<{path_w}} | {headers[2]:<{created_w}} | {headers[3]:<{updated_w}} |")
-    print(sep)
-    for r, cv, uv in zip(rows, created_vals, updated_vals):
-        print(f"| {r['name']:<{name_w}} | {r['path']:<{path_w}} | {cv:<{created_w}} | {uv:<{updated_w}} |")
-    print(sep)
 
-def select_data(query: str, k: int = 2):
-    """检索相似数据并在终端打印"""
-    service = SearchService()
-    results = service.search(query, k)
-    for doc, score in results:
-        meta = doc.metadata or {}
-        dir_path = meta.get("dir_path", "")
-        file_name = meta.get("file_name", "")
-        mk_struct = meta.get("mk_struct", "")
-        sim = f"{score:3f}"
-        left = f"{dir_path}/{file_name}" if dir_path else file_name
-        right = f"{mk_struct}"
-        meta_line = f" | {left} | {right} | {sim} | "
-        meta_sep = "-" * len(meta_line.strip())
-        print(meta_sep)
-        print(meta_line)
-        # 第二块：内容行（原样），单条分隔线，宽度匹配内容最长行
-        content = doc.page_content
-        lines = content.splitlines() or [content]
-        max_len = max(len(l) for l in lines)
-        csep_len = max(max_len, len(meta_sep))
-        csep = "-" * csep_len
-        print(csep)
-        print(content)
-        print(csep)
-
-
-def chain_results(query: str, mode: str | None = None, k: int = 2):
-    """运行 RAG 链并输出答案"""
-    chain = get_chain(mode)
-    result = chain.invoke({"question": query})
-    print(
-        "========================================Chain Result========================================\n",
-        result,
-    )
-
-
-def cli():
-    """Command line interface entry point."""
-    parser = argparse.ArgumentParser(description="My Note RAG Tool")
-    subparsers = parser.add_subparsers(dest="command")
-
-    # init
-    sp_init = subparsers.add_parser("init", help="Initialize RAG environment")
-    sp_init.add_argument("--chat-provider", type=str, choices=["ollama", "openai"], help="Chat provider")
-    sp_init.add_argument("--chat-model", type=str, help="Chat model")
-    sp_init.add_argument("--chat-base-url", type=str, help="Chat base URL")
-    sp_init.add_argument("--chat-api-key", type=str, help="Chat API key")
-    sp_init.add_argument("--emb-provider", type=str, choices=["ollama", "openai"], help="Embedding provider")
-    sp_init.add_argument("--emb-model", type=str, help="Embedding model")
-    sp_init.add_argument("--emb-base-url", type=str, help="Embedding base URL")
-    sp_init.add_argument("--emb-api-key", type=str, help="Embedding API key")
-
-    # add
-    sp_add = subparsers.add_parser("add", help="Add files or directory to RAG")
-    sp_add.add_argument("path", type=str, help="File or directory to add")
-
-    # select
-    sp_select = subparsers.add_parser("select", help="Query similar data")
-    sp_select.add_argument("query", type=str, help="Query text")
-    sp_select.add_argument("-k", type=int, default=2, help="Number of similar results")
-
-    # chain
-    sp_chain = subparsers.add_parser("chain", help="Run RAG chain with query")
-    sp_chain.add_argument("query", type=str, help="Query text")
-    sp_chain.add_argument("-m", "--mode", type=str, choices=["debug"], help="Mode for RAG chain")
-    sp_chain.add_argument("-k", type=int, default=2, help="Top-K similar chunks")
-    
-    # show
-    sp_show = subparsers.add_parser("show", help="Print documents table")
-    
-    # config
-    sp_config = subparsers.add_parser("config", help="Configure model provider and credentials")
-    sp_config.add_argument("--chat-provider", type=str, choices=["ollama", "openai"], help="Chat provider")
-    sp_config.add_argument("--chat-model", type=str, help="Chat model")
-    sp_config.add_argument("--chat-base-url", type=str, help="Chat base URL")
-    sp_config.add_argument("--chat-api-key", type=str, help="Chat API key")
-    sp_config.add_argument("--emb-provider", type=str, choices=["ollama", "openai"], help="Embedding provider")
-    sp_config.add_argument("--emb-model", type=str, help="Embedding model")
-    sp_config.add_argument("--emb-base-url", type=str, help="Embedding base URL")
-    sp_config.add_argument("--emb-api-key", type=str, help="Embedding API key")
-    sp_config.add_argument("--sys-prompt", type=str, help="Custom system prompt for the RAG chain")
-
-    args = parser.parse_args()
-
-    if args.command == "init":
-        init_with_models(
-            args.chat_provider,
-            args.chat_model,
-            args.chat_base_url,
-            args.chat_api_key,
-            args.emb_provider,
-            args.emb_model,
-            args.emb_base_url,
-            args.emb_api_key,
+    for r in rows:
+        table.add_row(
+            r['name'],
+            r['path'],
+            fmt_dt(r['created_at']),
+            fmt_dt(r['updated_at'])
         )
-    elif args.command == "add":
-        target = args.path
-        if os.path.isdir(target):
-            add_path_recursive(os.path.abspath(target))
-        else:
-            add_file(target)
-    elif args.command == "select":
-        select_data(args.query, args.k)
-    elif args.command == "chain":
-        chain = get_chain(args.mode)
-        result = chain.invoke({"question": args.query})
-        print(
-            "========================================Chain Result========================================\n",
-            result,
-        )
-    elif args.command == "show":
-        show_documents()
-    elif args.command == "config":
-        from x1ayu_rag.config.app_config import update_config
-        update_config({"chat": {"provider": args.chat_provider, "model": args.chat_model, "base_url": args.chat_base_url, "api_key": args.chat_api_key}})
-        update_config({"embedding": {"provider": args.emb_provider, "model": args.emb_model, "base_url": args.emb_base_url, "api_key": args.emb_api_key}})
-        update_config({"prompt": {"sys_prompt": args.sys_prompt}})
-        print("Configuration updated.")
+        
+    console.print(table)
+
+@cli.group(invoke_without_command=True)
+@click.pass_context
+def config(ctx):
+    """Manage configuration."""
+    if ctx.invoked_subcommand is None:
+        # 默认行为：进入交互式配置更新（与 update 逻辑一致）
+        # 这里我们引导用户使用 'rag config update' 或 'rag config show'
+        # 或者为了兼容性，保留原来的交互式配置逻辑，但作为默认行为
+        
+        # 检查初始化状态
+        db_file = os.path.join(".x1ayu_rag", "sqlite.db")
+        if not os.path.exists(db_file):
+            console.print("[red]Error: RAG environment not initialized.[/red]")
+            console.print("Please run [bold]rag init[/bold] first.")
+            sys.exit(1)
+            
+        update_interactive()
+
+@config.command()
+@check_initialized
+def show():
+    """Show current configuration."""
+    cfg = load_config()
+    from rich.table import Table
+    
+    table = Table(title="Current Configuration", show_header=True, header_style="bold magenta")
+    table.add_column("Section", style="cyan")
+    table.add_column("Key", style="green")
+    table.add_column("Value", style="yellow")
+    
+    def mask_key(k, v):
+        if "api_key" in k and v:
+            return v[:3] + "****" + v[-4:] if len(v) > 8 else "****"
+        return str(v)
+
+    # Chat Config
+    chat_cfg = cfg.get("chat", {})
+    for k, v in chat_cfg.items():
+        table.add_row("Chat", k, mask_key(k, v))
+        
+    # Embedding Config
+    emb_cfg = cfg.get("embedding", {})
+    for k, v in emb_cfg.items():
+        table.add_row("Embedding", k, mask_key(k, v))
+        
+    # Prompt Config
+    prompt_cfg = cfg.get("prompt", {})
+    for k, v in prompt_cfg.items():
+        table.add_row("Prompt", k, str(v))
+        
+    console.print(table)
+
+@config.command()
+@click.option('--chat-provider', type=click.Choice(["ollama", "openai"]), help="Chat provider")
+@click.option('--chat-model', help="Chat model")
+@click.option('--chat-base-url', help="Chat base URL")
+@click.option('--chat-api-key', help="Chat API key")
+@click.option('--emb-provider', type=click.Choice(["ollama", "openai"]), help="Embedding provider")
+@click.option('--emb-model', help="Embedding model")
+@click.option('--emb-base-url', help="Embedding base URL")
+@click.option('--emb-api-key', help="Embedding API key")
+@click.option('--sys-prompt', help="Custom system prompt for the RAG chain")
+@check_initialized
+def update(chat_provider, chat_model, chat_base_url, chat_api_key, 
+           emb_provider, emb_model, emb_base_url, emb_api_key, sys_prompt):
+    """Update configuration."""
+    # Check if any flags are provided
+    has_flags = any([chat_provider, chat_model, chat_base_url, chat_api_key,
+                     emb_provider, emb_model, emb_base_url, emb_api_key, sys_prompt])
+    
+    if not has_flags:
+        update_interactive()
     else:
-        parser.print_help()
+        # Non-interactive mode
+        updates = {}
+        if any([chat_provider, chat_model, chat_base_url, chat_api_key]):
+            updates["chat"] = {
+                "provider": chat_provider,
+                "model": chat_model,
+                "base_url": chat_base_url,
+                "api_key": chat_api_key
+            }
+        
+        if any([emb_provider, emb_model, emb_base_url, emb_api_key]):
+            updates["embedding"] = {
+                "provider": emb_provider,
+                "model": emb_model,
+                "base_url": emb_base_url,
+                "api_key": emb_api_key
+            }
+            
+        if sys_prompt:
+            updates["prompt"] = {"sys_prompt": sys_prompt}
+            
+        update_config(updates)
+        console.print("[green]Configuration updated.[/green]")
+
+def update_interactive():
+    """Interactive configuration update helper."""
+    current_config = load_config()
+    
+    updates = {}
+    
+    if click.confirm("Configure Chat Model?", default=True):
+        updates["chat"] = _configure_model("Chat", current_config.get("chat"))
+        
+    if click.confirm("Configure Embedding Model?", default=True):
+        updates["embedding"] = _configure_model("Embedding", current_config.get("embedding"))
+        
+    if click.confirm("Configure System Prompt?", default=False):
+        default_prompt = current_config.get("prompt", {}).get("sys_prompt", "")
+        new_prompt = click.prompt("Enter system prompt", default=default_prompt)
+        updates["prompt"] = {"sys_prompt": new_prompt}
+        
+    if updates:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            transient=True,
+        ) as progress:
+            task = progress.add_task(description="Updating configuration...", total=None)
+            update_config(updates)
+            time.sleep(0.5)
+        console.print("[green]Configuration updated successfully.[/green]")
+    else:
+        console.print("No changes made.")
+
+if __name__ == "__main__":
+    cli()

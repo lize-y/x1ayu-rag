@@ -2,7 +2,6 @@ from x1ayu_rag.cli.cli import cli
 import warnings
 import logging
 
-
 if __name__ == "__main__":
     # 忽略所有 UserWarning
     warnings.filterwarnings("ignore", category=UserWarning)
