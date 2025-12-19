@@ -1,9 +1,10 @@
 import os
 import json
 from typing import Any, Dict
+from x1ayu_rag.config.constants import DEFAULT_CONFIG_DIR, CONFIG_FILE_PATH
 
-CONFIG_DIR = ".x1ayu_rag"
-CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+CONFIG_DIR = DEFAULT_CONFIG_DIR
+CONFIG_FILE = CONFIG_FILE_PATH
 
 
 def ensure_config_dir():

@@ -1,8 +1,9 @@
 import sqlite3
 from importlib import resources
+from x1ayu_rag.config.constants import SQLITE_DB_PATH
 
 _conn = None
-db_path = ".x1ayu_rag/sqlite.db"
+db_path = SQLITE_DB_PATH
 
 
 def get_conn():

@@ -1,7 +1,8 @@
 from langchain_milvus import Milvus
 from x1ayu_rag.llm.provider import get_embeddings
+from x1ayu_rag.config.constants import MILVUS_DB_PATH
 
-URI = ".x1ayu_rag/milvus.db"
+URI = MILVUS_DB_PATH
 
 _vector_store = None
 

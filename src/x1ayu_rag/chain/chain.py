@@ -1,4 +1,4 @@
-from x1ayu_rag.db.milvus import get_similar_data
+from x1ayu_rag.service.search_service import SearchService
 from x1ayu_rag.llm.provider import get_chat_llm
 from langchain_core.runnables import RunnableLambda
 from langchain_core.prompts import PromptTemplate
@@ -23,7 +23,6 @@ template = """
 文档内容：{docs}
 """
 
-cfg = load_config()
 
 def get_debug_llm_input_node():
     """获取调试节点：打印 LLM 最终输入（Prompt）"""
@@ -75,12 +74,19 @@ def get_llm_node():
 
 def get_chain(mode: str | None = None, k: int = 2):
     """构建并返回 RAG 链
-
+    
+    使用 LangChain Expression Language (LCEL) 构建检索增强生成链。
+    链的结构根据 mode 参数动态调整。
+    
     参数:
-        mode: 可选的调试模式（'debug'）
-        k: 检索参考片段的数量，默认为 2
+        mode (str | None): 运行模式。
+                           - 'debug': 注入调试节点，打印模型信息和最终 Prompt。
+                           - None: 标准模式，仅包含核心逻辑。
+        k (int): 检索参考片段的数量，默认为 2。
+        
     返回:
-        Runnable: 可调用链对象
+        Runnable: 编译好的 LangChain 可运行对象。
+                  调用方式: chain.invoke({"question": "...", "k": ...})
     """
     rag_node = get_rag_node(k)
     template_node = get_template_node()
@@ -100,7 +106,8 @@ import json
 
 def rag_search(query: str, k: int = 2):
     """执行向量检索并格式化为模板可用的文本块"""
-    docs = get_similar_data(query, k)
+    service = SearchService()
+    docs = service.search(query, k)
     
     formatted_docs = []
     for doc, score in docs:

@@ -13,6 +13,7 @@ from x1ayu_rag.repository.document_repository import DocumentRepository
 from datetime import datetime, timezone
 from x1ayu_rag.config.app_config import update_config, load_config
 from x1ayu_rag.exceptions import NotInitializedError, ConfigurationError, ModelConnectionError, DatabaseError
+from x1ayu_rag.config.constants import SQLITE_DB_PATH, DEFAULT_CONFIG_DIR
 
 import sys
 from functools import wraps
@@ -23,8 +24,7 @@ def check_initialized(f):
     """装饰器：检查 RAG 环境是否已初始化"""
     @wraps(f)
     def wrapper(*args, **kwargs):
-        db_file = os.path.join(".x1ayu_rag", "sqlite.db")
-        if not os.path.exists(db_file):
+        if not os.path.exists(SQLITE_DB_PATH):
             raise NotInitializedError("RAG 环境未初始化。")
         return f(*args, **kwargs)
     return wrapper
@@ -59,7 +59,14 @@ def handle_errors(f):
     return wrapper
 
 def _init_env():
-    """初始化 RAG 运行环境（创建目录并初始化数据库）"""
+    """初始化 RAG 运行环境（创建目录并初始化数据库）
+    
+    该函数执行以下操作：
+    1. 创建配置目录（如果不存在）。
+    2. 检查 SQLite 数据库是否存在。
+    3. 如果不存在，则执行数据库初始化脚本 (db.sql)。
+    4. 显示初始化进度的 Spinner。
+    """
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -67,10 +74,9 @@ def _init_env():
     ) as progress:
         task = progress.add_task(description="正在初始化环境...", total=None)
         
-        os.makedirs(".x1ayu_rag", exist_ok=True)
-        db_file = os.path.join(".x1ayu_rag", "sqlite.db")
+        os.makedirs(DEFAULT_CONFIG_DIR, exist_ok=True)
         
-        if os.path.exists(db_file):
+        if os.path.exists(SQLITE_DB_PATH):
             time.sleep(0.5)  # 模拟工作以提升用户体验
             progress.update(task, description="环境已初始化")
         else:
@@ -426,8 +432,7 @@ def config(ctx):
         # 默认行为：进入交互式配置更新（与 update 逻辑一致）
         
         # 检查初始化状态
-        db_file = os.path.join(".x1ayu_rag", "sqlite.db")
-        if not os.path.exists(db_file):
+        if not os.path.exists(SQLITE_DB_PATH):
             raise NotInitializedError("RAG 环境未初始化。")
             
         _main_config_menu()
