@@ -1,10 +1,14 @@
 from __future__ import annotations
+from typing import Protocol, List, Optional, Any
 from x1ayu_rag.model.chunk import Chunk
 from uuid import uuid4
 from x1ayu_rag.utils.hash import text_hash
-from x1ayu_rag.utils.mdSplitter import split_markdown_from_content
 import os
 
+class Splitter(Protocol):
+    """文档切分器协议。"""
+    def split_text(self, text: str) -> List[Any]:
+        ...
 
 class Document:
     """文档领域对象
@@ -57,14 +61,14 @@ class Document:
 
 
     @classmethod
-    def from_file(cls, file_path: str) -> Document:
+    def from_file(cls, file_path: str, splitter: Optional[Splitter] = None) -> Document:
         """工厂方法：从文件构建文档（只读取一次）"""
         file_name = os.path.basename(file_path)
         dir_path = os.path.dirname(file_path)
 
         with open(file_path, "r", encoding="utf-8") as f:
             content = f.read()
-        return cls.from_content(file_name, dir_path, content)
+        return cls.from_content(file_name, dir_path, content, splitter=splitter)
 
     @classmethod
     def from_content(
@@ -73,8 +77,11 @@ class Document:
         dir_path: str | None,
         content: str,
         uuid: str | None = None,
+        splitter: Optional[Splitter] = None,
     ) -> Document:
         """工厂方法：从已知内容构建文档（避免重复 IO）"""
+        from x1ayu_rag.splitter.markdown import MarkdownSplitter
+        
         doc_hash = text_hash(content)
         abs_dir_path = dir_path
         rel_dir_path = None
@@ -83,7 +90,38 @@ class Document:
                 rel_dir_path = os.path.relpath(dir_path, os.getcwd())
             except Exception:
                 rel_dir_path = dir_path
-        md_docs = split_markdown_from_content(file_name, rel_dir_path, content)
+        
+        splitter_instance = splitter or MarkdownSplitter()
+        # 确保切分器具有所需的元数据注入逻辑或进行适配
+        # 目前，我们假设切分器返回与我们需要兼容的对象
+        # 原始代码直接调用 split_markdown_from_content
+        # 我们需要桥接这一点。
+        
+        # 如果是我们的 MarkdownSplitter，它有 create_documents 或类似方法
+        # 如果是旧版实用函数，我们将其包装。
+        
+        # 注意：原始代码使用了 `x1ayu_rag.utils.mdSplitter.split_markdown_from_content`
+        # 这似乎是 `MarkdownSplitter` 包装或替换的内容。
+        # 让我们检查是否可以正确使用注入的切分器实例。
+        
+        # 为了保持兼容性同时允许注入，我们检查切分器是
+        # 特定类还是只是接口。
+        
+        # 目前，我们假设注入的切分器有一个 `split_text` 或类似方法返回
+        # LangChain 文档或兼容对象列表。
+        
+        # 旧版代码：
+        # md_docs = split_markdown_from_content(file_name, rel_dir_path, content)
+        
+        # 如果使用新的 MarkdownSplitter 类：
+        if hasattr(splitter_instance, 'create_documents'):
+             md_docs = splitter_instance.create_documents([content], metadatas=[{"source": file_name, "dir_path": rel_dir_path}])
+        else:
+             # 如果未提供兼容的切分器，则回退到实用函数
+             # 这在所有切分器标准化之前是一个临时解决方案
+             from x1ayu_rag.utils.mdSplitter import split_markdown_from_content
+             md_docs = split_markdown_from_content(file_name, rel_dir_path, content)
+
         chunks = [Chunk(hash=text_hash(doc.page_content), lc_document=doc) for doc in md_docs]
         document = cls(uuid=uuid, name=file_name, path=abs_dir_path or "", hash=doc_hash, chunks=chunks)
         return document

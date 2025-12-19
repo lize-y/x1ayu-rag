@@ -12,6 +12,7 @@ from x1ayu_rag.service.search_service import SearchService
 from x1ayu_rag.repository.document_repository import DocumentRepository
 from datetime import datetime, timezone
 from x1ayu_rag.config.app_config import update_config, load_config
+from x1ayu_rag.exceptions import NotInitializedError, ConfigurationError, ModelConnectionError, DatabaseError
 
 import sys
 from functools import wraps
@@ -19,15 +20,42 @@ from functools import wraps
 console = Console()
 
 def check_initialized(f):
-    """Decorator to check if RAG environment is initialized."""
+    """装饰器：检查 RAG 环境是否已初始化"""
     @wraps(f)
     def wrapper(*args, **kwargs):
         db_file = os.path.join(".x1ayu_rag", "sqlite.db")
         if not os.path.exists(db_file):
-            console.print("[red]Error: RAG environment not initialized.[/red]")
-            console.print("Please run [bold]rag init[/bold] first.")
-            sys.exit(1)
+            raise NotInitializedError("RAG 环境未初始化。")
         return f(*args, **kwargs)
+    return wrapper
+
+def handle_errors(f):
+    """装饰器：处理 RAG 特定的异常"""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        try:
+            return f(*args, **kwargs)
+        except NotInitializedError:
+            console.print("fatal: RAG environment not initialized. Please run 'rag init' first.")
+            sys.exit(1)
+        except ConfigurationError as e:
+            console.print(f"[red]配置错误: {e.message}[/red]")
+            console.print("请运行 [bold]rag config update[/bold] 修复配置。")
+            sys.exit(1)
+        except ModelConnectionError as e:
+            console.print(f"[red]模型连接错误: {e.message}[/red]")
+            console.print("[yellow]提示: 请检查您的模型服务（如 Ollama）是否正在运行并可访问。[/yellow]")
+            if click.confirm("是否现在配置模型？", default=True):
+                 _main_config_menu()
+            sys.exit(1)
+        except DatabaseError as e:
+            console.print(f"[red]数据库错误: {e.message}[/red]")
+            if e.original_error:
+                 console.print(f"[dim]详细信息: {e.original_error}[/dim]")
+            sys.exit(1)
+        except Exception as e:
+            console.print(f"[red]未预期的错误: {e}[/red]")
+            sys.exit(1)
     return wrapper
 
 def _init_env():
@@ -37,122 +65,174 @@ def _init_env():
         TextColumn("[progress.description]{task.description}"),
         transient=True,
     ) as progress:
-        task = progress.add_task(description="Initializing environment...", total=None)
+        task = progress.add_task(description="正在初始化环境...", total=None)
         
         os.makedirs(".x1ayu_rag", exist_ok=True)
         db_file = os.path.join(".x1ayu_rag", "sqlite.db")
         
         if os.path.exists(db_file):
-            time.sleep(0.5)  # Simulate work for better UX
-            progress.update(task, description="Environment already initialized")
+            time.sleep(0.5)  # 模拟工作以提升用户体验
+            progress.update(task, description="环境已初始化")
         else:
             initialize_db()
-            time.sleep(0.5)  # Simulate work
+            time.sleep(0.5)  # 模拟工作
+
+def _main_config_menu(startup_message: str = None):
+    """主配置菜单循环"""
+    first_run = True
+    while True:
+        click.clear()  # 清屏
+        if first_run and startup_message:
+            console.print(startup_message)
+            first_run = False
+
+        questions = [
+            inquirer.List('choice',
+                          message="",  # 移除提示文本
+                          choices=['Chat', 'Embedding', 'Exit'],
+                          ),
+        ]
+        answers = inquirer.prompt(questions)
+        choice = answers['choice']
+        
+        if choice == 'Exit':
+            break
             
-    console.print("[green]✓ RAG environment initialized.[/green]")
+        _model_config_menu(choice)
 
-def _configure_model(model_type: str, current_config: dict = None):
-    """交互式配置模型"""
-    current_config = current_config or {}
-    
-    console.print(f"\n[bold blue]Configure {model_type} Model[/bold blue]")
-    
-    # Provider selection with inquirer
-    questions = [
-        inquirer.List('provider',
-                      message=f"Select {model_type} provider",
-                      choices=['ollama', 'openai'],
-                      default=current_config.get("provider", "ollama")
-                      ),
-    ]
-    answers = inquirer.prompt(questions)
-    provider = answers['provider']
-    
-    # Model name
-    default_model = current_config.get("model")
-    if not default_model:
-        default_model = "llama3" if provider == "ollama" else "gpt-3.5-turbo"
+def _model_config_menu(model_type: str):
+    """模型配置菜单循环"""
+    while True:
+        click.clear()  # 清屏
+        current_config = load_config()
+        model_key = model_type.lower()
+        config_data = current_config.get(model_key, {})
         
-    model = click.prompt(
-        f"Enter {model_type} model name",
-        default=default_model
-    )
-    
-    # Base URL
-    default_base_url = current_config.get("base_url")
-    if not default_base_url:
-        default_base_url = "http://localhost:11434" if provider == "ollama" else "https://api.openai.com/v1"
+        console.print(f"Current {model_type} Configuration", style="bold magenta")
+        from rich.table import Table
+        # 创建一个无边框或极简边框的表格，以匹配用户期望的简洁样式
+        # box=None 去除所有边框，或者使用简单的 ASCII 边框
+        from rich import box
+        table = Table(show_header=True, header_style="bold", box=box.ROUNDED)
+        table.add_column("Key", style="green")
+        table.add_column("Value", style="yellow")
         
-    base_url = click.prompt(
-        f"Enter {model_type} base URL",
-        default=default_base_url
-    )
-    
-    # API Key
-    api_key = current_config.get("api_key")
-    if provider == "openai":
-        api_key = click.prompt(
-            f"Enter {model_type} API key",
-            hide_input=True,
-            default=api_key or ""
-        )
-    else:
-        # No API key needed for Ollama, but we'll allow updating it if someone really wants to
-        # According to requirements: "当选择ollama时，不需要用户填写api_key"
-        # We will set it to empty string or keep existing if not prompting
-        api_key = ""
+        for k, v in config_data.items():
+            val_str = str(v)
+            if "api_key" in k and v:
+                val_str = v[:3] + "****" + v[-4:] if len(v) > 8 else "****"
+            table.add_row(k, val_str)
+            
+        # 如果是 Chat 模型，额外显示 System Prompt
+        if model_type == "Chat":
+            prompt_config = current_config.get("chat", {})
+            sys_prompt = prompt_config.get("sys_prompt", "")
+            # 为了在表格中区分，可以使用不同的颜色或前缀，或者直接列出
+            # 这里将其视为 Chat 配置的一部分展示
+            table.add_row("System Prompt", str(sys_prompt))
 
-    return {
-        "provider": provider,
-        "model": model,
-        "base_url": base_url,
-        "api_key": api_key
-    }
+        console.print(table)
+        console.print() # 空行
+
+        # 选项列表
+        choices = ["Provider", "Model", "Base URL", "API Key"]
+        if model_type == "Chat":
+            choices.append("System Prompt")
+        choices.append("Back")
+        
+        questions = [
+            inquirer.List('field',
+                          message=f"选择要修改的配置项 ({model_type})",
+                          choices=choices,
+                          ),
+        ]
+        answers = inquirer.prompt(questions)
+        field = answers['field']
+        
+        if field == "Back":
+            break
+            
+        if field == "System Prompt":
+            prompt_config = current_config.get("chat", {})
+            default_val = prompt_config.get("sys_prompt", "")
+            new_val = click.prompt("Enter new system prompt", default=default_val)
+            update_config({"chat": {"sys_prompt": new_val}})
+            console.print(f"[green]Updated System Prompt successfully.[/green]")
+            time.sleep(1)
+            continue
+            
+        key_map = {
+            "Provider": "provider",
+            "Model": "model",
+            "Base URL": "base_url",
+            "API Key": "api_key"
+        }
+        
+        key = key_map[field]
+        
+        if key == "provider":
+            q_prov = [
+                inquirer.List('provider',
+                              message=f"Select {model_type} provider",
+                              choices=['ollama', 'openai'],
+                              default=config_data.get("provider", "ollama")
+                              ),
+            ]
+            ans_prov = inquirer.prompt(q_prov)
+            new_val = ans_prov['provider']
+        else:
+            default_val = config_data.get(key, "")
+            if key == "api_key":
+                 new_val = click.prompt(f"Enter new {field}", default=default_val, hide_input=True)
+            else:
+                 new_val = click.prompt(f"Enter new {field}", default=default_val)
+        
+        # 更新配置
+        updates = {model_key: {key: new_val}}
+        update_config(updates)
+        console.print(f"[green]Updated {field} successfully.[/green]")
+        time.sleep(1) # 短暂暂停以显示成功消息，然后清屏刷新
 
 @click.group()
 def cli():
-    """My Note RAG Tool - A CLI for managing and querying your personal knowledge base."""
+    """My Note RAG Tool - 用于管理和查询个人知识库的 CLI 工具。"""
     pass
 
 @cli.command()
-@click.option('--chat-provider', type=click.Choice(["ollama", "openai"]), help="Chat provider")
-@click.option('--chat-model', help="Chat model")
-@click.option('--chat-base-url', help="Chat base URL")
-@click.option('--chat-api-key', help="Chat API key")
-@click.option('--emb-provider', type=click.Choice(["ollama", "openai"]), help="Embedding provider")
-@click.option('--emb-model', help="Embedding model")
-@click.option('--emb-base-url', help="Embedding base URL")
-@click.option('--emb-api-key', help="Embedding API key")
+@click.option('--chat-provider', type=click.Choice(["ollama", "openai"]), help="聊天模型提供商")
+@click.option('--chat-model', help="聊天模型名称")
+@click.option('--chat-base-url', help="聊天模型基础 URL")
+@click.option('--chat-api-key', help="聊天模型 API 密钥")
+@click.option('--emb-provider', type=click.Choice(["ollama", "openai"]), help="Embedding 模型提供商")
+@click.option('--emb-model', help="Embedding 模型名称")
+@click.option('--emb-base-url', help="Embedding 模型基础 URL")
+@click.option('--emb-api-key', help="Embedding 模型 API 密钥")
+@handle_errors
 def init(chat_provider, chat_model, chat_base_url, chat_api_key, 
          emb_provider, emb_model, emb_base_url, emb_api_key):
-    """Initialize RAG environment and configure models."""
+    """初始化 RAG 环境并配置模型。"""
     _init_env()
     
-    # If any flags are provided, use non-interactive mode for those parts
-    # Otherwise, enter interactive mode
+    # 如果提供了任何标志，则对这些部分使用非交互模式
+    # 否则，进入交互模式
     is_interactive = not any([chat_provider, chat_model, chat_base_url, chat_api_key,
                             emb_provider, emb_model, emb_base_url, emb_api_key])
     
     if is_interactive:
-        if click.confirm("\nWould you like to configure models now?", default=True):
-            chat_config = _configure_model("Chat")
-            emb_config = _configure_model("Embedding")
+        # 直接进入配置菜单，不再询问
+        _main_config_menu(startup_message="[green]✓ RAG 环境初始化完成。[/green]")
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            transient=True,
+        ) as progress:
+            task = progress.add_task(description="正在保存配置...", total=None)
+            time.sleep(0.5)
             
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                transient=True,
-            ) as progress:
-                task = progress.add_task(description="Saving configuration...", total=None)
-                update_config({
-                    "chat": chat_config,
-                    "embedding": emb_config
-                })
-                time.sleep(0.5)
-                
-            console.print("[green]✓ Configuration saved successfully![/green]")
+        console.print("[green]✓ 配置保存成功！[/green]")
     else:
-        # Non-interactive mode (use provided flags)
+        # 非交互模式（使用提供的标志）
         update_config({
             "chat": {
                 "provider": chat_provider,
@@ -167,13 +247,14 @@ def init(chat_provider, chat_model, chat_base_url, chat_api_key,
                 "api_key": emb_api_key,
             },
         })
-        console.print("[green]Model configuration saved.[/green]")
+        console.print("[green]模型配置已保存。[/green]")
 
 @cli.command()
 @click.argument('path', type=click.Path(exists=True))
+@handle_errors
 @check_initialized
 def add(path):
-    """Add files or directory to RAG."""
+    """添加文件或目录到 RAG 系统。"""
     target = Path(path)
     if target.is_dir():
         _add_path_recursive(target.absolute())
@@ -183,6 +264,7 @@ def add(path):
 def _add_file(file_path: str):
     """新增或更新单个文件到系统"""
     service = IngestService()
+    # 错误现在由装饰器处理或抛出给装饰器
     action, uuid = service.add_or_update(file_path)
     # 移除 Rich 标记语法，确保 [action] 能正常显示
     console.print(f"\\[{action}] {os.path.basename(file_path)} uuid={uuid}")
@@ -198,7 +280,7 @@ def _add_path_recursive(p: Path):
             TextColumn("[progress.description]{task.description}"),
             transient=True,
         ) as progress:
-            task = progress.add_task(description=f"Processing {len(md_files)} files...", total=None)
+            task = progress.add_task(description=f"正在处理 {len(md_files)} 个文件...", total=None)
             successes, failures = service.add_or_update_many(md_files)
         
         cwd = os.getcwd()
@@ -210,7 +292,7 @@ def _add_path_recursive(p: Path):
             rel = os.path.relpath(fp, cwd)
             console.print(f"[red][error] {rel}: {err}[/red]")
     else:
-        console.print("No markdown files found under directory; checking deletions...")
+        console.print("目录下未找到 Markdown 文件；正在检查删除...")
     
     # 删除文件系统中已缺失的文档
     _remove_missing_under_path(str(p.resolve()))
@@ -238,16 +320,14 @@ def _remove_missing_under_path(root: str):
             removed += 1
             rel_path = os.path.relpath(fs_path, abs_root)
             console.print(f"[yellow][deleted] {rel_path} uuid={doc.uuid}[/yellow]")
-            
-    if removed == 0:
-        console.print("No deletions detected.")
 
 @cli.command()
 @click.argument('query')
-@click.option('-k', default=2, help="Number of similar results")
+@click.option('-k', default=2, help="相似结果数量")
+@handle_errors
 @check_initialized
 def select(query, k):
-    """Query similar data."""
+    """查询相似数据。"""
     service = SearchService()
     results = service.search(query, k)
     
@@ -260,50 +340,52 @@ def select(query, k):
         left = f"{dir_path}/{file_name}" if dir_path else file_name
         right = f"{mk_struct}"
         
-        console.print(f"\n[bold]File:[/bold] {left} | [bold]Structure:[/bold] {right} | [bold]Score:[/bold] {sim}")
+        console.print(f"\n[bold]文件:[/bold] {left} | [bold]结构:[/bold] {right} | [bold]分数:[/bold] {sim}")
         console.print("-" * 80)
         console.print(doc.page_content)
         console.print("-" * 80)
 
 @cli.command()
 @click.argument('query')
-@click.option('-m', '--mode', type=click.Choice(["debug"]), help="Mode for RAG chain")
-@click.option('-k', default=2, help="Top-K similar chunks")
+@click.option('-m', '--mode', type=click.Choice(["debug"]), help="RAG 链模式")
+@click.option('-k', default=2, help="前 K 个相似块")
+@handle_errors
 @check_initialized
 def chain(query, mode, k):
-    """Run RAG chain with query."""
+    """使用查询运行 RAG 链。"""
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         transient=True,
     ) as progress:
-        task = progress.add_task(description="Thinking...", total=None)
-        chain_obj = get_chain(mode)
-        result = chain_obj.invoke({"question": query})
+        task = progress.add_task(description="思考中...", total=None)
+        # 传递 k 参数给 get_chain
+        chain_obj = get_chain(mode, k=k)
+        # invoke 时传递 k 参数，确保运行时动态生效（虽然 get_chain 已经处理了，双重保险）
+        result = chain_obj.invoke({"question": query, "k": k})
         
-    console.print("\n[bold green]================ Chain Result ================[/bold green]")
+    console.print("\n[bold green]================ 链执行结果 ================[/bold green]")
     console.print(result)
 
 @cli.command()
+@handle_errors
 @check_initialized
 def show():
-    """Print documents table."""
-    cursor = get_conn().cursor()
-    cursor.execute("SELECT name, path, created_at, updated_at FROM documents ORDER BY path, name")
-    rows = cursor.fetchall()
-    cursor.close()
+    """打印文档表格。"""
+    repo = DocumentRepository()
+    rows = repo.list_all_with_details()
     
     if not rows:
-        console.print("documents is empty.")
+        console.print("文档列表为空。")
         return
         
-    # Using Rich Table for better formatting
+    # 使用 Rich Table 进行更好的格式化
     from rich.table import Table
     table = Table(show_header=True, header_style="bold magenta")
-    table.add_column("NAME")
-    table.add_column("PATH")
-    table.add_column("CREATED")
-    table.add_column("UPDATED")
+    table.add_column("名称")
+    table.add_column("路径")
+    table.add_column("创建时间")
+    table.add_column("更新时间")
     
     def fmt_dt(v: str) -> str:
         if not v:
@@ -337,33 +419,31 @@ def show():
 
 @cli.group(invoke_without_command=True)
 @click.pass_context
+@handle_errors
 def config(ctx):
-    """Manage configuration."""
+    """管理配置。"""
     if ctx.invoked_subcommand is None:
         # 默认行为：进入交互式配置更新（与 update 逻辑一致）
-        # 这里我们引导用户使用 'rag config update' 或 'rag config show'
-        # 或者为了兼容性，保留原来的交互式配置逻辑，但作为默认行为
         
         # 检查初始化状态
         db_file = os.path.join(".x1ayu_rag", "sqlite.db")
         if not os.path.exists(db_file):
-            console.print("[red]Error: RAG environment not initialized.[/red]")
-            console.print("Please run [bold]rag init[/bold] first.")
-            sys.exit(1)
+            raise NotInitializedError("RAG 环境未初始化。")
             
-        update_interactive()
+        _main_config_menu()
 
 @config.command()
+@handle_errors
 @check_initialized
 def show():
-    """Show current configuration."""
+    """显示当前配置。"""
     cfg = load_config()
     from rich.table import Table
     
-    table = Table(title="Current Configuration", show_header=True, header_style="bold magenta")
-    table.add_column("Section", style="cyan")
-    table.add_column("Key", style="green")
-    table.add_column("Value", style="yellow")
+    table = Table(title="当前配置", show_header=True, header_style="bold magenta")
+    table.add_column("部分", style="cyan")
+    table.add_column("键", style="green")
+    table.add_column("值", style="yellow")
     
     def mask_key(k, v):
         if "api_key" in k and v:
@@ -380,35 +460,39 @@ def show():
     for k, v in emb_cfg.items():
         table.add_row("Embedding", k, mask_key(k, v))
         
-    # Prompt Config
+    # Prompt Config - Legacy or if we want to display it?
+    # User moved sys_prompt to chat, so we might not need this section unless there are other prompt settings.
+    # But for backward compatibility or clarity, let's just check if it exists and is not empty.
     prompt_cfg = cfg.get("prompt", {})
-    for k, v in prompt_cfg.items():
-        table.add_row("Prompt", k, str(v))
+    if prompt_cfg:
+        for k, v in prompt_cfg.items():
+            table.add_row("Prompt (Legacy)", k, str(v))
         
     console.print(table)
 
 @config.command()
-@click.option('--chat-provider', type=click.Choice(["ollama", "openai"]), help="Chat provider")
-@click.option('--chat-model', help="Chat model")
-@click.option('--chat-base-url', help="Chat base URL")
-@click.option('--chat-api-key', help="Chat API key")
-@click.option('--emb-provider', type=click.Choice(["ollama", "openai"]), help="Embedding provider")
-@click.option('--emb-model', help="Embedding model")
-@click.option('--emb-base-url', help="Embedding base URL")
-@click.option('--emb-api-key', help="Embedding API key")
-@click.option('--sys-prompt', help="Custom system prompt for the RAG chain")
+@click.option('--chat-provider', type=click.Choice(["ollama", "openai"]), help="聊天模型提供商")
+@click.option('--chat-model', help="聊天模型名称")
+@click.option('--chat-base-url', help="聊天模型基础 URL")
+@click.option('--chat-api-key', help="聊天模型 API 密钥")
+@click.option('--emb-provider', type=click.Choice(["ollama", "openai"]), help="Embedding 模型提供商")
+@click.option('--emb-model', help="Embedding 模型名称")
+@click.option('--emb-base-url', help="Embedding 模型基础 URL")
+@click.option('--emb-api-key', help="Embedding 模型 API 密钥")
+@click.option('--sys-prompt', help="RAG 链的自定义系统提示词")
+@handle_errors
 @check_initialized
 def update(chat_provider, chat_model, chat_base_url, chat_api_key, 
            emb_provider, emb_model, emb_base_url, emb_api_key, sys_prompt):
-    """Update configuration."""
-    # Check if any flags are provided
+    """更新配置。"""
+    # 检查是否提供了任何标志
     has_flags = any([chat_provider, chat_model, chat_base_url, chat_api_key,
                      emb_provider, emb_model, emb_base_url, emb_api_key, sys_prompt])
     
     if not has_flags:
-        update_interactive()
+        _main_config_menu()
     else:
-        # Non-interactive mode
+        # 非交互模式
         updates = {}
         if any([chat_provider, chat_model, chat_base_url, chat_api_key]):
             updates["chat"] = {
@@ -427,40 +511,11 @@ def update(chat_provider, chat_model, chat_base_url, chat_api_key,
             }
             
         if sys_prompt:
-            updates["prompt"] = {"sys_prompt": sys_prompt}
+            updates["chat"] = updates.get("chat", {})
+            updates["chat"]["sys_prompt"] = sys_prompt
             
         update_config(updates)
-        console.print("[green]Configuration updated.[/green]")
-
-def update_interactive():
-    """Interactive configuration update helper."""
-    current_config = load_config()
-    
-    updates = {}
-    
-    if click.confirm("Configure Chat Model?", default=True):
-        updates["chat"] = _configure_model("Chat", current_config.get("chat"))
-        
-    if click.confirm("Configure Embedding Model?", default=True):
-        updates["embedding"] = _configure_model("Embedding", current_config.get("embedding"))
-        
-    if click.confirm("Configure System Prompt?", default=False):
-        default_prompt = current_config.get("prompt", {}).get("sys_prompt", "")
-        new_prompt = click.prompt("Enter system prompt", default=default_prompt)
-        updates["prompt"] = {"sys_prompt": new_prompt}
-        
-    if updates:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            transient=True,
-        ) as progress:
-            task = progress.add_task(description="Updating configuration...", total=None)
-            update_config(updates)
-            time.sleep(0.5)
-        console.print("[green]Configuration updated successfully.[/green]")
-    else:
-        console.print("No changes made.")
+        console.print("[green]配置已更新。[/green]")
 
 if __name__ == "__main__":
     cli()

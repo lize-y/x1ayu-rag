@@ -8,68 +8,108 @@ from langchain_core.output_parsers import StrOutputParser
 _chain = None
 
 template = """
-你是一个知识问答助手。
-{sys_prompt}
-对不确定的问题，请说明不确定性而不是编造答案。
-基于以下检索内容回答问题。
+你是一个知识问答助手，回答时请严格遵循以下规则：
 
-问题:
-{query}
-
-检索内容:
-{docs}
-
-回答格式为:
-- 回答内容
-- 参考资料来源列表，格式为文件路径加内容摘要
+1. 只能使用提供的文档内容回答，不允许凭个人知识。
+2. 每个结论必须标注文档来源，格式：[文档名-段落号]。
+3. 用户可提供额外提示，请在回答中遵循。
+4. 如果文档中信息不足，明确回答：“文档中未提供相关信息”。
+5. 输出必须严格分为两部分：
+   - 第一部分：回答正文
+   - 第二部分：引用文档列表，每条文档显示格式：
+       文件名: 文档内容
+用户问题：{question}
+用户提示：{user_prompt}
+文档内容：{docs}
 """
 
-debug = RunnableLambda(
-    lambda x: print(
-        "========================================Prompt========================================\n",
-        x,
+cfg = load_config()
+
+def get_debug_llm_input_node():
+    """获取调试节点：打印 LLM 最终输入（Prompt）"""
+    return RunnableLambda(
+        lambda x: print(
+            "========================================Prompt========================================\n",
+            x,
+            "===================================================================================\n"
+        )
+        or x
     )
-    or x
-)
 
+def get_debug_model_info_node():
+    """获取调试节点：打印模型配置信息"""
+    # 重新加载配置以获取最新状态
+    cfg = load_config()
+    chat_config = cfg.get("chat", {})
+    return RunnableLambda(
+        lambda x: print(
+            f"========================================Model========================================\n"
+            f"Provider: {chat_config.get('provider')}\n"
+            f"Model:    {chat_config.get('model')}\n"
+            f"Base URL: {chat_config.get('base_url')}\n"
+            f"===================================================================================\n"
+        ) or x
+    )
 
-def get_chain(mode: str | None = None, sys_prompt: str | None = None):
+def get_rag_node(k: int = 2):
+    """获取 RAG 检索节点"""
+    cfg = load_config()
+    # 从 chat 配置中读取 sys_prompt，不再使用独立的 prompt 配置
+    user_sys_prompt = cfg.get("chat", {}).get("sys_prompt") or ""
+    
+    return RunnableLambda(
+        lambda x: {
+            "question": x["question"],
+            "docs": rag_search(x["question"], k=x.get("k", k)), # 优先使用 invoke 参数中的 k，否则使用函数默认 k
+            "user_prompt": user_sys_prompt,
+        }
+    )
+
+def get_template_node():
+    """获取 Prompt 模板节点"""
+    return PromptTemplate.from_template(template)
+
+def get_llm_node():
+    """获取 LLM 节点"""
+    return get_chat_llm(temperature=0)
+
+def get_chain(mode: str | None = None, k: int = 2):
     """构建并返回 RAG 链
 
     参数:
         mode: 可选的调试模式（'debug'）
-        sys_prompt: 系统提示词，插入到模板中
+        k: 检索参考片段的数量，默认为 2
     返回:
         Runnable: 可调用链对象
     """
-    global _chain
-    if _chain is None:
-        cfg = load_config()
-        user_sys_prompt = cfg.get("prompt", {}).get("sys_prompt") or ""
-        rag_node = RunnableLambda(
-            lambda x: {
-                "query": x["question"],
-                "docs": rag_search(x["question"], k=2),
-                "sys_prompt": sys_prompt if sys_prompt else user_sys_prompt,
-            }
-        )
-        template_node = PromptTemplate.from_template(template)
-        llm_node = get_chat_llm(temperature=0)
-        if mode == "debug":
-            _chain = rag_node | template_node | debug | llm_node | StrOutputParser()
-        else:
-            _chain = rag_node | template_node | llm_node | StrOutputParser()
-    return _chain
+    rag_node = get_rag_node(k)
+    template_node = get_template_node()
+    llm_node = get_llm_node()
+    
+    if mode == "debug":
+        debug_model_info = get_debug_model_info_node()
+        debug_llm_input = get_debug_llm_input_node()
+        chain_instance = debug_model_info | rag_node | template_node | debug_llm_input | llm_node | StrOutputParser()
+    else:
+        chain_instance = rag_node | template_node | llm_node | StrOutputParser()
+    
+    return chain_instance
 
+
+import json
 
 def rag_search(query: str, k: int = 2):
     """执行向量检索并格式化为模板可用的文本块"""
     docs = get_similar_data(query, k)
-    return "\n".join(
-        [
-            f"""- {doc.metadata["dir_path"]}/{doc.metadata["file_name"]}
-    {doc.metadata["mk_struct"]}:{repr(doc.page_content)}
-[SIM={score:3f}]"""
-            for doc, score in docs
-        ]
-    )
+    
+    formatted_docs = []
+    for doc, score in docs:
+        doc_info = {
+            "doc_name": f"{doc.metadata.get('dir_path', '')}/{doc.metadata.get('file_name', '')}",
+            "位置": doc.metadata.get("mk_struct", ""),
+            "content": doc.page_content,
+            "sim_score": score # Optional: include score if needed, though user didn't explicitly ask for it in JSON
+        }
+        formatted_docs.append(doc_info)
+        
+    return json.dumps(formatted_docs, ensure_ascii=False, indent=2)

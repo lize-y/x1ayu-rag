@@ -1,36 +1,42 @@
 from __future__ import annotations
 import os
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Protocol, List
 from x1ayu_rag.repository.document_repository import DocumentRepository
 from x1ayu_rag.repository.chunk_repository import ChunkRepository
 from typing import Iterable
 from x1ayu_rag.utils.hash import text_hash
 from x1ayu_rag.model.document import Document
+from x1ayu_rag.model.chunk import Chunk
 from x1ayu_rag.splitter.markdown import MarkdownSplitter
 
+class Splitter(Protocol):
+    """文档切分器协议。"""
+    def split_text(self, text: str) -> List[Chunk]:
+        ...
 
 class IngestService:
     """文档摄取服务
-
+    
     负责将文件新增或更新至系统，比较哈希判断是否需要重建分块与索引。
     """
-    def __init__(self, repo: Optional[DocumentRepository] = None):
+    def __init__(self, repo: Optional[DocumentRepository] = None, splitter: Optional[Splitter] = None):
         """初始化服务
-
+        
         参数:
             repo: 文档仓储（可选），默认为系统内置实现
+            splitter: 文档切分器（可选），默认为 MarkdownSplitter
         """
         self.repo = repo or DocumentRepository(ChunkRepository())
-        self.splitter = MarkdownSplitter()
+        self.splitter = splitter or MarkdownSplitter()
 
     def add_or_update(self, file_path: str) -> Tuple[str, str]:
         """新增或更新文档
-
+        
         行为：
         - 不存在则新增并返回 ('added', uuid)
         - 内容未变化则不操作并返回 ('noop', uuid)
         - 内容变化则删除旧分块并重建，返回 ('updated', 新uuid)
-
+        
         参数:
             file_path: 待处理的文件路径
         返回:
@@ -48,14 +54,14 @@ class IngestService:
                 self.repo.update_path_name(same.uuid, dir_path, file_name)
                 return ("moved", same.uuid)
             # 不存在相同哈希文档，新增文档
-            new_doc = Document.from_content(file_name, dir_path, content)
+            new_doc = Document.from_content(file_name, dir_path, content, splitter=self.splitter)
             self.repo.store(new_doc)
             return ("added", new_doc.uuid)
         # 存在, 哈希未变化, 不操作
         if existing.hash == new_hash:
             return ("noop", existing.uuid)
         # 存在, 哈希变化, 更新
-        replaced_doc = Document.from_content(file_name, dir_path, content, uuid=existing.uuid)
+        replaced_doc = Document.from_content(file_name, dir_path, content, uuid=existing.uuid, splitter=self.splitter)
         self.repo.update_hash(existing.uuid, new_hash)
         self.repo.replace_chunks(existing.uuid, replaced_doc.chunks or [])
         return ("updated", existing.uuid)
@@ -76,6 +82,7 @@ class IngestService:
         return successes, failures
 
     def _resolve_paths(self, file_path: str) -> Tuple[str, str, str]:
+        """解析文件路径，返回绝对路径、文件名和相对目录路径。"""
         abs_path = os.path.abspath(file_path)
         file_name = os.path.basename(abs_path)
         dir_path_abs = os.path.dirname(abs_path)
@@ -86,6 +93,7 @@ class IngestService:
         return abs_path, file_name, dir_path
 
     def _read_content_hash(self, abs_path: str) -> Tuple[str, str]:
+        """读取文件内容并计算哈希值。"""
         with open(abs_path, "r", encoding="utf-8") as f:
             content = f.read()
         return content, text_hash(content)
