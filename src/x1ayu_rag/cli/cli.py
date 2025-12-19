@@ -5,11 +5,10 @@ import inquirer
 from pathlib import Path
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
-from x1ayu_rag.db.sqlite import initialize_db, get_conn
 from x1ayu_rag.chain.chain import get_chain
+from x1ayu_rag.service.system_service import SystemService
 from x1ayu_rag.service.ingest_service import IngestService
 from x1ayu_rag.service.search_service import SearchService
-from x1ayu_rag.repository.document_repository import DocumentRepository
 from datetime import datetime, timezone
 from x1ayu_rag.config.app_config import update_config, load_config
 from x1ayu_rag.exceptions import NotInitializedError, ConfigurationError, ModelConnectionError, DatabaseError
@@ -19,12 +18,13 @@ import sys
 from functools import wraps
 
 console = Console()
+system_service = SystemService()
 
 def check_initialized(f):
     """装饰器：检查 RAG 环境是否已初始化"""
     @wraps(f)
     def wrapper(*args, **kwargs):
-        if not os.path.exists(SQLITE_DB_PATH):
+        if not system_service.is_initialized():
             raise NotInitializedError("RAG 环境未初始化。")
         return f(*args, **kwargs)
     return wrapper
@@ -74,13 +74,12 @@ def _init_env():
     ) as progress:
         task = progress.add_task(description="正在初始化环境...", total=None)
         
-        os.makedirs(DEFAULT_CONFIG_DIR, exist_ok=True)
+        initialized = system_service.initialize_environment()
         
-        if os.path.exists(SQLITE_DB_PATH):
+        if not initialized:
             time.sleep(0.5)  # 模拟工作以提升用户体验
             progress.update(task, description="环境已初始化")
         else:
-            initialize_db()
             time.sleep(0.5)  # 模拟工作
 
 def _main_config_menu(startup_message: str = None):
@@ -262,8 +261,35 @@ def init(chat_provider, chat_model, chat_base_url, chat_api_key,
 def add(path):
     """添加文件或目录到 RAG 系统。"""
     target = Path(path)
+    service = IngestService()
+    
     if target.is_dir():
-        _add_path_recursive(target.absolute())
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            transient=True,
+        ) as progress:
+            task = progress.add_task(description=f"正在同步目录...", total=None)
+            successes, failures, deleted = service.sync_directory(str(target))
+        
+        cwd = os.getcwd()
+        # 显示新增/更新结果
+        for fp, action, uuid in successes:
+            rel = os.path.relpath(fp, cwd)
+            console.print(f"\\[{action}] {rel} uuid={uuid}")
+            
+        # 显示错误
+        for fp, err in failures:
+            rel = os.path.relpath(fp, cwd)
+            console.print(f"[red][error] {rel}: {err}[/red]")
+            
+        # 显示删除结果
+        if not successes and not failures and not deleted:
+            console.print("目录下未找到 Markdown 文件；已检查删除。")
+            
+        for rel_path, uuid in deleted:
+            console.print(f"\\[deleted] {rel_path} uuid={uuid}")
+            
     else:
         _add_file(str(target))
 
@@ -275,64 +301,12 @@ def _add_file(file_path: str):
     # 移除 Rich 标记语法，确保 [action] 能正常显示
     console.print(f"\\[{action}] {os.path.basename(file_path)} uuid={uuid}")
 
-def _add_path_recursive(p: Path):
-    """递归处理目录下所有 .md 文件，判断新增/更新"""
-    md_files = [str(fp) for fp in p.rglob("*.md")]
-    
-    service = IngestService()
-    if md_files:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            transient=True,
-        ) as progress:
-            task = progress.add_task(description=f"正在处理 {len(md_files)} 个文件...", total=None)
-            successes, failures = service.add_or_update_many(md_files)
-        
-        cwd = os.getcwd()
-        for fp, action, uuid in successes:
-            rel = os.path.relpath(fp, cwd)
-            # 移除 Rich 标记语法，确保 [action] 能正常显示
-            console.print(f"\\[{action}] {rel} uuid={uuid}")
-        for fp, err in failures:
-            rel = os.path.relpath(fp, cwd)
-            console.print(f"[red][error] {rel}: {err}[/red]")
-    else:
-        console.print("目录下未找到 Markdown 文件；正在检查删除...")
-    
-    # 删除文件系统中已缺失的文档
-    _remove_missing_under_path(str(p.resolve()))
-
-def _remove_missing_under_path(root: str):
-    """检测数据库中文档在文件系统是否已删除，补偿删除记录与索引"""
-    repo = DocumentRepository()
-    abs_root = os.path.abspath(root)
-    rel_root = os.path.relpath(abs_root, os.getcwd())
-    docs = repo.list_all() if rel_root in (".", "") else repo.list_by_path_prefix(rel_root)
-    service = IngestService(repo)
-    removed = 0
-    
-    for doc in docs:
-        if rel_root in (".", ""):
-            fs_path = os.path.join(abs_root, doc.path, doc.name)
-        else:
-            if not (doc.path == rel_root or doc.path.startswith(f"{rel_root}/")):
-                continue
-            rel_suffix = os.path.relpath(doc.path, rel_root)
-            fs_path = os.path.join(abs_root, "" if rel_suffix == "." else rel_suffix, doc.name)
-        
-        if not os.path.exists(fs_path):
-            service.repo.delete_by_uuid(doc.uuid)
-            removed += 1
-            rel_path = os.path.relpath(fs_path, abs_root)
-            console.print(f"[yellow][deleted] {rel_path} uuid={doc.uuid}[/yellow]")
-
 @cli.command()
 @click.argument('query')
 @click.option('-k', default=2, help="相似结果数量")
 @handle_errors
 @check_initialized
-def select(query, k):
+def search(query, k):
     """查询相似数据。"""
     service = SearchService()
     results = service.search(query, k)
@@ -378,8 +352,8 @@ def chain(query, mode, k):
 @check_initialized
 def show():
     """打印文档表格。"""
-    repo = DocumentRepository()
-    rows = repo.list_all_with_details()
+    service = IngestService()
+    rows = service.list_documents()
     
     if not rows:
         console.print("文档列表为空。")
@@ -432,7 +406,7 @@ def config(ctx):
         # 默认行为：进入交互式配置更新（与 update 逻辑一致）
         
         # 检查初始化状态
-        if not os.path.exists(SQLITE_DB_PATH):
+        if not system_service.is_initialized():
             raise NotInitializedError("RAG 环境未初始化。")
             
         _main_config_menu()
