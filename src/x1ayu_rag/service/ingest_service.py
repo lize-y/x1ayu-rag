@@ -174,3 +174,11 @@ class IngestService:
                     results.append(("[deleted]", to_relative_path(doc_full_path), doc.uuid))
 
         return results
+
+    def list_documents(self) -> list[Document]:
+        """列出所有文档
+        
+        返回:
+            list[Document]: 所有已摄取的文档列表
+        """
+        return self.doc_repo.list_all()

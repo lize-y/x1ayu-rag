@@ -4,6 +4,8 @@ from x1ayu_rag.service.ingest_service import IngestService
 from x1ayu_rag.service.constants import IngestOp
 from x1ayu_rag.utils.path_utils import to_relative_path
 
+from x1ayu_rag.model.document import Document
+
 class IngestAPI:
     """摄取 API 层
     
@@ -11,6 +13,14 @@ class IngestAPI:
     """
     def __init__(self):
         self.service = IngestService()
+
+    def list_documents(self) -> list[Document]:
+        """获取所有已摄取的文档
+        
+        返回:
+            list[Document]: 文档列表
+        """
+        return self.service.list_documents()
 
     def ingest_document(self, file_path: str) -> Tuple[bool, str, list]:
         """处理文档或目录摄取请求
@@ -38,9 +48,6 @@ class IngestAPI:
                 # 目录递归结果
                 results = result # 现在的 result 是 list[tuple]
                 
-                # 为了保持接口返回类型一致性，我们可以返回 (True, "Sync complete", results)
-                # CLI 层将负责遍历 results 并打印
-                
                 # 计算统计信息以供消息使用
                 count = len(results)
                 msg = f"Sync complete: Processed {count} items."
@@ -52,7 +59,6 @@ class IngestAPI:
             else:
                 # 单文件操作结果 (ADDED, UPDATED, SKIPPED)
                 # 统一包装成 list 格式
-                # 假设 result 是 "Document ... added. UUID: ..."
                 detail = str(result)
                 uuid_val = detail
                 if "UUID: " in detail:

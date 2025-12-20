@@ -131,6 +131,35 @@ def add(file_path):
         click.echo(message)
 
 @cli.command()
+@require_init
+def show():
+    """列出所有已摄取的文档"""
+    api = IngestAPI()
+    docs = api.list_documents()
+    
+    if not docs:
+        console.print("[yellow]暂无已摄取文档。使用 'rag add <file/dir>' 添加文档。[/yellow]")
+        return
+
+    table = Table(title="文档", box=box.ROUNDED)
+    table.add_column("Filename", style="cyan")
+    table.add_column("Path", style="dim")
+    table.add_column("UUID", style="green")
+    table.add_column("Hash", style="dim")
+    
+    for doc in docs:
+        table.add_row(
+            doc.name,
+            doc.path or ".",
+            doc.uuid,
+            doc.hash[:8] + "..." if doc.hash else "N/A"
+        )
+        
+    console.print(table)
+    console.print(f"\n[dim]Total: {len(docs)} documents[/dim]")
+
+
+@cli.command()
 @click.argument('query')
 @click.option('-k', default=2, help="相似结果数量")
 @require_init
