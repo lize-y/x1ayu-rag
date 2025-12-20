@@ -30,11 +30,9 @@ def _init_env():
             # 如果初始化失败（例如已存在），通常是正常的，这里我们不打断流程
             pass
 
-
-
 @click.group()
 def cli():
-    """x1ayu RAG v2 CLI"""
+    """x1ayu RAG"""
     pass
 
 @cli.command()
