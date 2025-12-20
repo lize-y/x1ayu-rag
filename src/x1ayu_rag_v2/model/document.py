@@ -4,7 +4,8 @@ from uuid import uuid4
 import os
 from x1ayu_rag_v2.model.chunk import Chunk
 from x1ayu_rag_v2.utils.hash import text_hash
-from x1ayu_rag_v2.utils.splitter_factory import get_splitter
+from x1ayu_rag_v2.splitter.base import get_splitter
+from x1ayu_rag_v2.utils.path_utils import to_relative_path
 
 class Document:
     """文档领域对象
@@ -41,7 +42,8 @@ class Document:
             content = f.read()
         
         file_name = os.path.basename(file_path)
-        dir_path = os.path.dirname(file_path)
+        # 将目录路径转换为相对路径
+        dir_path = to_relative_path(os.path.dirname(file_path))
         
         return cls.from_content(file_name, dir_path, content)
 

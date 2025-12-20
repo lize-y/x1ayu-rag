@@ -2,7 +2,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from langchain_core.documents import Document
 
-
 class SplitterStrategy(ABC):
     """切分器策略基类。"""
     
@@ -18,3 +17,12 @@ class SplitterStrategy(ABC):
         返回:
             list[Document]: 切分后的文档列表
         """
+
+
+def get_splitter():
+    """获取默认的 Markdown 切分器实例。
+    
+    目前固定使用 MarkdownSplitter。
+    """
+    from x1ayu_rag_v2.splitter.markdown import MarkdownSplitter
+    return MarkdownSplitter()

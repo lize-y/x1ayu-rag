@@ -7,7 +7,8 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from x1ayu_rag.chain.chain import get_chain
 from x1ayu_rag.service.system_service import SystemService
-from x1ayu_rag.service.ingest_service import IngestService
+from x1ayu_rag_v2.api.ingest_api import IngestAPI
+from x1ayu_rag_v2.api.query_api import QueryAPI
 from x1ayu_rag.service.search_service import SearchService
 from datetime import datetime, timezone
 from x1ayu_rag.config.app_config import update_config, load_config
@@ -352,8 +353,8 @@ def chain(query, mode, k):
 @check_initialized
 def show():
     """打印文档表格。"""
-    service = IngestService()
-    rows = service.list_documents()
+    query_api = QueryAPI()
+    rows = query_api.get_document_table_data()
     
     if not rows:
         console.print("文档列表为空。")
@@ -364,38 +365,48 @@ def show():
     table = Table(show_header=True, header_style="bold magenta")
     table.add_column("名称")
     table.add_column("路径")
-    table.add_column("创建时间")
-    table.add_column("更新时间")
+    table.add_column("UUID")
     
-    def fmt_dt(v: str) -> str:
-        if not v:
-            return "-"
-        vs = str(v).strip()
-        if vs.isdigit():
-            try:
-                dt_utc = datetime.utcfromtimestamp(int(vs)).replace(tzinfo=timezone.utc)
-                return dt_utc.astimezone().strftime("%Y-%m-%d %H:%M:%S")
-            except Exception:
-                return vs
-        try:
-            try:
-                dt_naive = datetime.strptime(vs, "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                dt_naive = datetime.fromisoformat(vs)
-            dt_utc = dt_naive.replace(tzinfo=timezone.utc) if dt_naive.tzinfo is None else dt_naive.astimezone(timezone.utc)
-            return dt_utc.astimezone().strftime("%Y-%m-%d %H:%M:%S")
-        except Exception:
-            return vs
-
     for r in rows:
         table.add_row(
-            r['name'],
-            r['path'],
-            fmt_dt(r['created_at']),
-            fmt_dt(r['updated_at'])
+            r['Name'],
+            r['Path'],
+            r['UUID']
         )
         
     console.print(table)
+
+@cli.command()
+@handle_errors
+@check_initialized
+def select():
+    """交互式选择文档。"""
+    query_api = QueryAPI()
+    
+    # 初始显示所有文档
+    choices = query_api.search_for_select("")
+    
+    if not choices:
+        console.print("文档列表为空。")
+        return
+
+    questions = [
+        inquirer.List('document',
+                      message="选择一个文档 (输入以过滤)",
+                      choices=choices,
+                      carousel=True
+                      ),
+    ]
+    
+    try:
+        answers = inquirer.prompt(questions)
+        if answers:
+            selected_str = answers['document']
+            console.print(f"[green]你选择了: {selected_str}[/green]")
+            # 这里可以扩展后续操作，比如显示详情或删除
+    except KeyboardInterrupt:
+        console.print("\n已取消。")
+        return
 
 @cli.group(invoke_without_command=True)
 @click.pass_context

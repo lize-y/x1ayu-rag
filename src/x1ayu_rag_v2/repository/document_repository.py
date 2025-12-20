@@ -55,6 +55,44 @@ class DocumentRepository:
             )
         return None
 
+    def list_all(self) -> list[Document]:
+        """获取所有文档"""
+        conn = SqliteDB.get_conn()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM documents")
+        rows = cursor.fetchall()
+        return [
+            Document(
+                uuid=row["uuid"],
+                name=row["name"],
+                path=row["path"],
+                hash=row["hash"],
+                chunks=None
+            )
+            for row in rows
+        ]
+
+    def search_documents(self, query: str) -> list[Document]:
+        """模糊搜索文档 (匹配名称或路径)"""
+        conn = SqliteDB.get_conn()
+        cursor = conn.cursor()
+        search_pattern = f"%{query}%"
+        cursor.execute(
+            "SELECT * FROM documents WHERE name LIKE ? OR path LIKE ?", 
+            (search_pattern, search_pattern)
+        )
+        rows = cursor.fetchall()
+        return [
+            Document(
+                uuid=row["uuid"],
+                name=row["name"],
+                path=row["path"],
+                hash=row["hash"],
+                chunks=None
+            )
+            for row in rows
+        ]
+
     def delete_by_uuid(self, uuid: str):
         """原子性地删除文档及其分块"""
         conn = SqliteDB.get_conn()
