@@ -1,5 +1,4 @@
 import os
-import time
 from x1ayu_rag.config.constants import DEFAULT_CONFIG_DIR, SQLITE_DB_PATH
 from x1ayu_rag.repository.system_repository import SystemRepository
 
@@ -29,6 +28,8 @@ class SystemService:
         """
         os.makedirs(DEFAULT_CONFIG_DIR, exist_ok=True)
         
+        # 即使 DB 文件已存在，init_db 也是幂等的（通常），
+        # 但这里为了符合 v1 逻辑，如果存在则返回 False
         if self.is_initialized():
             return False
         

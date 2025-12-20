@@ -48,3 +48,46 @@ rag chain "如何设计权限系统"
 - openai
 
 ## 项目结构
+```bash
+└── x1ayu_rag
+    ├── __init__.py
+    ├── chain
+    │   ├── __init__.py
+    │   └── chain.py    # 问答链
+    ├── cli
+    │   └── cli.py    # 命令行接口
+    ├── config
+    │   ├── __init__.py
+    │   ├── app_config.py    # 应用配置
+    │   ├── constants.py    # 常量配置
+    │   └── file
+    │       ├── __init__.py
+    │       └── db.sql    # 数据库文件
+    ├── db
+    │   ├── __init__.py
+    │   ├── milvus.py    # milvus数据库操作
+    │   └── sqlite.py    # sqlite数据库操作
+    ├── exceptions.py    # 异常处理
+    ├── global
+    │   └── global.py    # 全局变量
+    ├── llm
+    │   └── provider.py    # 大模型提供器
+    ├── main.py
+    ├── model
+    │   ├── __init__.py    # 数据模型
+    │   ├── chunk.py    # 文档分块模型
+    │   └── document.py    # 文档模型
+    ├── repository
+    │   ├── chunk_repository.py    # 文档分块仓库
+    │   └── document_repository.py    # 文档仓库
+    ├── service
+    │   ├── ingest_service.py    # 文档处理服务
+    │   └── search_service.py    # 文档查询服务
+    ├── splitter
+    │   ├── base.py    # 文档分块器基类
+    │   └── markdown.py    # markdown文档分块器
+    └── utils
+        ├── __init__.py    # 工具模块
+        ├── hash.py    # 哈希工具
+        └── mdSplitter.py    # markdown文档分块工具
+```
